@@ -1,0 +1,183 @@
+import sys
+from direct.showbase.ShowBase import ShowBase
+from direct.actor.Actor import Actor
+from panda3d.core import Point3, Vec3, CollisionTraverser, CollisionHandlerQueue, CollisionRay, CollisionNode, GeomNode, NodePath, TextNode
+from panda3d.bullet import BulletWorld, BulletRigidBodyNode, BulletDebugNode, BulletSphereShape, BulletBoxShape, BulletSliderConstraint
+from direct.gui.OnscreenText import OnscreenText
+from direct.gui.DirectGui import DirectFrame, DirectButton, DirectLabel
+from direct.task import Task
+import random
+
+class MarionettePuppetGame(ShowBase):
+    def __init__(self):
+        super().__init__()
+
+        # Load models
+        self.marionette = Actor("models/marionette.egg", {
+            "walk": "models/marionette-walk.egg",
+            "idle": "models/marionette-idle.egg",
+        })
+        self.master_hand = Actor("models/master_hand.egg")
+        self.grappling_hook = Actor("models/grappling_hook.egg")
+        self.stage = Actor("models/stage.egg")
+        self.obstacles = [Actor("models/obstacle.egg") for _ in range(4)]
+
+        # Set up physics
+        self.world = BulletWorld()
+        self.world.setGravity(Vec3(0, 0, -9.81))
+
+        # Set up grappling hook
+        self.grappling_hook_node = BulletRigidBodyNode('GrapplingHook')
+        self.grappling_hook_node.setMass(1.0)
+        self.grappling_hook_node.addShape(BulletSphereShape(0.1))
+        self.grappling_hook_path = NodePath(self.grappling_hook_node)
+        self.world.attachRigidBody(self.grappling_hook_node)
+
+        # Set up master hand
+        self.master_hand_node = BulletRigidBodyNode('MasterHand')
+        self.master_hand_node.setMass(1.0)
+        self.master_hand_node.addShape(BulletSphereShape(0.1))
+        self.master_hand_path = NodePath(self.master_hand_node)
+        self.world.attachRigidBody(self.master_hand_node)
+
+        # Set up marionette
+        self.marionette_node = BulletRigidBodyNode('Marionette')
+        self.marionette_node.setMass(1.0)
+        self.marionette_node.addShape(BulletBoxShape(Vec3(0.5, 0.5, 1.0)))
+        self.marionette_path = NodePath(self.marionette_node)
+        self.world.attachRigidBody(self.marionette_node)
+
+        # Set up UI
+        self.score_text = OnscreenText(text="Score: 0", pos=(-1.3, 0.9), scale=0.07, fg=(1, 1, 1, 1), align=TextNode.ALeft)
+        self.time_text = OnscreenText(text="Time: 60", pos=(1.3, 0.9), scale=0.07, fg=(1, 1, 1, 1), align=TextNode.ARight)
+        self.health_text = OnscreenText(text="Health: 100", pos=(-1.3, 0.8), scale=0.07, fg=(1, 1, 1, 1), align=TextNode.ALeft)
+
+        # Set up tasks
+        self.taskMgr.add(self.update, "update")
+        self.taskMgr.add(self.check_collisions, "check_collisions")
+        self.taskMgr.add(self.update_ui, "update_ui")
+
+        # Initialize game state
+        self.score = 0
+        self.time = 60
+        self.health = 100
+
+    def update(self, task):
+        # Update marionette animation
+        self.marionette.play("walk")
+
+        # Update master hand position
+        self.master_hand.setPos(self.get_mouse_pos())
+
+        # Update grappling hook position
+        self.grappling_hook.setPos(self.get_mouse_pos())
+
+        # Update physics
+        self.world.doPhysics(task.time)
+
+        return Task.cont
+
+    def check_collisions(self, task):
+        # Check for collisions between marionette and obstacles
+        for obstacle in self.obstacles:
+            if self.marionette.getPos().distance(obstacle.getPos()) < 1.0:
+                self.marionette.play("idle")
+                self.health -= 10
+                self.health_text.setText("Health: " + str(self.health))
+
+        # Check for collisions between marionette and stage
+        if self.marionette.getPos().z < 0:
+            self.marionette.play("idle")
+            self.health -= 10
+            self.health_text.setText("Health: " + str(self.health))
+
+        return Task.cont
+
+    def update_ui(self, task):
+        # Update score text        # Update score text
+        self.score += 1
+        self.score_text.setText("Score: " + str(self.score))
+
+        # Update time text
+        self.time -= 1
+        self.time_text.setText("Time: " + str(self.time))
+
+        # Check for game over
+        if self.health <= 0 or self.time <= 0:
+            self.game_over()
+
+        return Task.cont
+
+    def game_over(self):
+        # Display game over screen
+        self.game_over_screen = DirectFrame(frameSize=(-1, 1, -1, 1), frameColor=(0, 0, 0, 1))
+        self.game_over_text = OnscreenText(text="Game Over!", pos=(0, 0), scale=0.1, fg=(1, 1, 1, 1), align=TextNode.ACenter)
+        self.game_over_text.reparentTo(self.game_over_screen)
+        self.retry_button = DirectButton(text="Retry", pos=(0, -0.5), scale=0.1, command=self.retry)
+        self.retry_button.reparentTo(self.game_over_screen)
+
+    def retry(self):
+        # Restart game
+        self.game_over_screen.destroy()
+        self.score = 0
+        self.time = 60
+        self.health = 100
+        self.score_text.setText("Score: 0")
+        self.time_text.setText("Time: 60")
+        self.health_text.setText("Health: 100")
+
+    def get_mouse_pos(self):
+        # Get mouse position
+        mouse_x = self.getMouseX()
+        mouse_y = self.getMouseY()
+        return mouse_x, mouse_y
+
+    def setup_obstacles(self):
+        # Set up obstacles
+        for i, obstacle in enumerate(self.obstacles):
+            obstacle.reparentTo(self.render)
+            obstacle.setPos(random.uniform(-10, 10), random.uniform(-10, 10), 0)
+            obstacle_node = BulletRigidBodyNode('Obstacle')
+            obstacle_node.setMass(1.0)
+            obstacle_node.addShape(BulletBoxShape(Vec3(1, 1, 1)))
+            obstacle_path = NodePath(obstacle_node)
+            self.world.attachRigidBody(obstacle_node)
+
+    def setup_stage(self):
+        # Set up stage
+        self.stage.reparentTo(self.render)
+        self.stage.setPos(0, 0, 0)
+
+    def setup_master_hand(self):
+        # Set up master hand
+        self.master_hand.reparentTo(self.render)
+        self.master_hand.setPos(0, 0, 10)
+
+    def setup_marionette(self):
+        # Set up marionette
+        self.marionette.reparentTo(self.render)
+        self.marionette.setPos(0, 0, 0)
+
+    def setup_grappling_hook(self):
+        # Set up grappling hook
+        self.grappling_hook.reparentTo(self.render)
+        self.grappling_hook.setPos(0, 0, 0)
+
+    def setup_ui(self):
+        # Set up UI
+        self.score_text.reparentTo(self.aspect2d)
+        self.time_text.reparentTo(self.aspect2d)
+        self.health_text.reparentTo(self.aspect2d)
+
+    def start_game(self):
+        # Start game
+        self.setup_obstacles()
+        self.setup_stage()
+        self.setup_master_hand()
+        self.setup_marionette()
+        self.setup_grappling_hook()
+        self.setup_ui()
+
+game = MarionettePuppetGame()
+game.start_game()
+game.run()
